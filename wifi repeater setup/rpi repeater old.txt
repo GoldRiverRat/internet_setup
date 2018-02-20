@@ -1,0 +1,305 @@
+1. Either start with a fresh install of Rasbian, or make a backup image of your current install
+
+2. Make a backup of the interfaces file with sudo mv /etc/network/interfaces /etc/network/interfaces.BAK
+
+2. Open /etc/network/interfaces with a text editor and paste in what is below (assuming you have the same interfaces):
+
+# The loopback network interface
+ auto lo
+ iface lo inet loopback
+
+# the internal (wired) network interface
+ allow-hotplug eth0
+ iface eth0 inet static
+  address 192.168.2.1
+  network 192.168.2.0
+  netmask 255.255.255.0
+  broadcast 192.168.2.255
+  gateway 192.168.2.1
+
+# the wifi interface communicating with the main router
+ allow-hotplug wlan0
+ iface wlan0 inet static
+  address 192.168.1.98
+  netmask 255.255.255.0
+  broadcast 192.168.1.255
+  gateway 192.168.1.1
+  # add the wifi network name and password that you are connecting to
+  wpa-ssid "*********"
+  wpa-psk "**********"
+  # if the wifi refuses to connect, try changing TKIP to AES
+  wpa-group TKIP CCMP
+  wpa-key-mgmt WPA-PSK
+
+# the wifi interface acting as an AP for the repeater
+ allow-hotplug wlan0
+ iface wlan1 inet static
+  address 192.168.3.1
+  network 192.168.3.0
+  netmask 255.255.255.0
+  broadcast 192.168.3.255
+  gateway 192.168.3.1
+
+pre-up iptables-restore < /etc/network/iptables
+
+3. Reboot the pi with sudo shutdown -r now to let the interface settings take effect
+
+*wonder why you don't have a pi 2*
+
+4. Open a script called resetiptables.sh and fill it with the following:
+
+#!/bin/sh
+ IPTABLES="$(which iptables)"
+# RESET DEFAULT POLICIES
+ $IPTABLES -P INPUT ACCEPT
+ $IPTABLES -P FORWARD ACCEPT
+ $IPTABLES -P OUTPUT ACCEPT
+ $IPTABLES -t nat -P PREROUTING ACCEPT
+ $IPTABLES -t nat -P POSTROUTING ACCEPT
+ $IPTABLES -t nat -P OUTPUT ACCEPT
+ $IPTABLES -t mangle -P PREROUTING ACCEPT
+ $IPTABLES -t mangle -P OUTPUT ACCEPT
+# FLUSH ALL RULES, ERASE NON-DEFAULT CHAINS
+ $IPTABLES -F
+ $IPTABLES -X
+ $IPTABLES -t nat -F
+ $IPTABLES -t nat -X
+ $IPTABLES -t mangle -F
+ $IPTABLES -t mangle -X
+
+5. chmod 755 resetiptables
+
+6. sudo ./resetiptables. This removes any table rules you currently have.
+
+7. This is where the magic happens. Open a script called setupiptables.sh and fill it with the following:
+
+#!/bin/sh
+ IPT=/sbin/iptables
+ LOCAL_IFACE=eth0
+ INET_IFACE=wlan0
+ AP_IFACE=wlan1
+ INET_ADDRESS=192.168.1.98
+# Flush the tables
+ $IPT -F INPUT
+ $IPT -F OUTPUT
+ $IPT -F FORWARD
+$IPT -t nat -P PREROUTING ACCEPT
+ $IPT -t nat -P POSTROUTING ACCEPT
+ $IPT -t nat -P OUTPUT ACCEPT
+# Allow forwarding packets:
+ $IPT -A FORWARD -p ALL -i $LOCAL_IFACE -o $INET_IFACE -j ACCEPT
+ $IPT -A FORWARD -p ALL -i $AP_IFACE -o $INET_IFACE -j ACCEPT
+ $IPT -A FORWARD -i $INET_IFACE -o $LOCAL_IFACE -m state --state ESTABLISHED,RELATED -j ACCEPT
+ $IPT -A FORWARD -i $INET_IFACE -o $AP_IFACE -m state --state ESTABLISHED,RELATED -j ACCEPT
+# Packet masquerading
+ #$IPT -t nat -A POSTROUTING -o $LOCAL_IFACE -j MASQUERADE
+ # I'm pretty sure this is unneeded but I added it because I'm mirroring the original script
+ #$IPT -t nat -A POSTROUTING -o $AP_IFACE -j MASQUERADE
+ $IPT -t nat -A POSTROUTING -o $INET_IFACE -j SNAT --to-source $INET_ADDRESS
+
+8. chmod 755 setupiptables
+
+9. sudo ./setupiptables
+
+10. sudo iptables-save > dump.txt
+
+11. sudo cp dump.txt /etc/network/iptables
+
+12. sudo nano /etc/sysctl.conf and uncomment the line net.ipv4.ip_forward=1
+
+13. sudo sysctl --system
+
+14. Open a script called setuproutes and fill it with the following:
+
+#!/bin/sh
+#/etc/init.d/setuproutes
+#
+### BEGIN INIT INFO
+# Provides: default routes for wlan0
+# Required-Start: $syslog $network
+# Required-Stop: $syslog
+# Should-Start:
+# Should-Stop:
+# X-Start-Before:
+# X-Stop-After:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# X-Interactive: false
+# Short-Description: adjust default routes
+# Description: removes default route 192.168.2.1 adds default route 192.168.1.1
+### END INIT INFO
+sudo route del default gw 192.168.2.1 eth0
+sudo route del default gw 192.168.3.1 wlan1
+sudo route add default gw 192.168.1.1 wlan0
+exit 0
+
+15. chmod 755 setuproutes
+
+16. sudo cp setuproutes /etc/init.d
+
+17. sudo update-rc.d setuproutes defaults
+
+18. sudo shutdown -r now
+
+*crack a beer*
+
+19. sudo nano sudo nano /etc/init.d/wlan-restart and fill it with the following:
+
+#!/bin/sh
+#
+#
+
+### BEGIN INIT INFO
+# Provides:          wlan-restart
+# Required-Start:    $network
+# Required-Stop:     $network
+# Should-Start:
+# Should-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Restarts wlan interfaces
+# Description:       Restarts wlan interfaces to fix problem with static address in WiFi AP
+# X-Start-Before:    hostapd isc-dhcp-server
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:$PATH
+
+do_start() {
+  ifdown wlan0
+  ifup wlan0
+  ifdown wlan1
+  ifup wlan1
+}
+
+case "$1" in
+  start)
+    do_start
+    ;;
+  restart|reload|force-reload)
+    echo "Error: argument '$1' not supported" >&2
+    exit 3
+    ;;
+  stop)
+    ;;
+  status)
+    ;;
+  *)
+    echo "Usage: $0 start|stop" >&2
+    exit 3
+    ;;
+esac
+exit 0
+
+20. sudo chmod 755 /etc/init.d/wlan-restart
+
+21. sudo update-rc.d wlan-restart defaults
+
+
+22. sudo apt-get update
+
+*take a quick nap*
+
+23. sudo apt-get install isc-dhcp-server
+
+*strum fingers impatiently*
+
+24. sudo mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcpd.conf.orig
+
+25. sudo nano /etc/dhcp/dhcpd.conf and fill it with the following:
+
+#
+# Configuration file for ISC dhcpd for Debian
+#
+#
+ddns-update-style none;
+option domain-name "rbn.local";
+option domain-name-servers 192.168.1.1;
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+log-facility local7;
+#let the server know about network 192.168.1.0 but offer no service here
+subnet 192.168.1.0 netmask 255.255.255.0{
+}
+#configure service for network 192.168.2.0 (the ethernet port)
+subnet 192.168.2.0 netmask 255.255.255.0 { 
+ range 192.168.2.10 192.168.2.50;
+ option routers 192.168.2.1;
+ option ip-forwarding off;
+}
+#configure service for nework 192.168.3.0 (the wireless AP)
+subment 192.168.3.0 netmask 255.255.255.0 {
+ range 192.168.3.10 192.168.3.50;
+ option routers 192.168.3.1;
+ option ip-forwarding off;
+}
+
+26. sudo nano /etc/default/isc-dhcp-server and change INTERFACES="" to INTERFACES="eth0 wlan1"
+
+27. sudo service isc-dhcp-server restart
+
+Almost there! time to start making the new wireless network
+
+28. sudo apt-get install hostapd
+
+Now, this wasn't covered very well in either tutorial, which is why I made this tutorial. In short, we have to compile the lastest hostapd files and use them to replace the ones we downloaded from apt-get.
+
+29. git clone git://w1.fi/srv/git/hostap.git
+
+30. cd hostap/hostapd
+
+31. cp defconfig .config
+
+32. nano .config
+
+33. uncomment this line #CONFIG_DRIVER_NL80211=y
+
+34. uncomment this line #CONFIG_IEEE80211N=y
+
+35. sudo apt-get install libnl-dev
+
+The next command will compile the hostapd files, I admit, there are two dependencies that need to be solved, and I forget what they are off the top of my head :( you can solve them with apt-get though
+
+36. make 
+
+*browse reddit because this is going to take forever*
+
+36. sudo mv /usr/sbin/hostapd /usr/sbin/hostapd.ORIG
+
+37. sudo mv hostapd /usr/sbin
+
+38. sudo chmod 755 /usr/sbin/hostapd
+
+Woot! So that updated hostapd to the latest version and installed the nl80211 driver which may come in handy later
+
+39. sudo nano /etc/hostapd/hostapd.conf and fill it with the following:
+
+interface=wlan1
+#if you get an error, try uncommenting rt1871xdrv and commenting nl80111
+#driver=rtl871xdrv
+driver=nl80211
+# change this to what you want
+ssid=Pi_AP
+hw_mode=g
+channel=6
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+# I'd change your password to something a bit less obvious
+wpa_passphrase=Raspberry
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+
+40. sudo nano /etc/default/hostapd
+
+41. Find #DAEMON_CONF="" and uncomment it plus change to DAEMON_CONF="/etc/hostapd/hostapd.conf"
+
+42. sudo service hostapd start
+
+43. sudo update-rc.d hostapd enable
+
+44. And finally..... sudo shutdown -r now.
+
+When you reboot, you should be able to connect to the wifi network being broadcast from the pi, and have internet access!!

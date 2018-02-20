@@ -1,0 +1,205 @@
+your Raspberry Pi for devices to connect to.
+
+This tutorial can be combined well with our VPN Access Point tutorial, you can find the tutorial on how to set that up located directly after this tutorial. Basically, it will show how to setup a OpenVPN client and redirect all traffic through that client.
+
+Please note however, this tutorial will require some slight changes, we will explain those changes needed at the end of this tutorial.
+
+ Equipment List
+Below are all the bits and pieces that I used for this Raspberry Pi WiFi Extender tutorial, you will need two WiFi dongles to be able to complete this tutorial, at least one must be able to act as an access point.
+
+Recommended:
+ Raspberry Pi 2 or 3
+
+ Micro SD Card or a SD card if you’re using an old version of the Pi.
+
+ Wifi dongle * 2 (The Pi 3 has WiFi inbuilt)
+
+Optional:
+ Raspberry Pi Case
+
+ Setting up the WiFi Extender
+To setup our Raspberry Pi Wi-Fi Extender we will need to utilize the dnsmasq package, this package handles most of the grunt work for this tutorial as it acts as both our DNS and DHCP server for our connections. We will also need to utilize the hostapd package, this is the package that will allow us to setup one of our Wi-Fi modules as an access point.
+
+Remember for this tutorial you will need to have an active Wi-Fi router to connect to and an ethernet device you intend on bridging the Wi-Fi connection to.
+
+1. Before we get started installing and setting up our packages, we will first run an update on the Raspberry Pi by entering the following two commands into the terminal.
+
+sudo apt-get update
+sudo apt-get upgrade
+2. With that done we can now install the two packages that we will be utilizing, run the following command to install dnsmasq and hostapd.
+
+sudo apt-get install dnsmasq
+sudo apt-get install hostapd
+3. Before we get to far ahead of ourselves, we should setup the wlan0 connection that we plan on using. If you have already setup your wireless connection then you can skip ahead to step 5.
+
+Otherwise open up the wpa-supplicant.conf file by running the following command on your Raspberry Pi:
+
+sudo nano  /etc/wpa_supplicant/wpa_supplicant.conf
+4. Within this file add the following, making sure you replace the ssid with the name of the network you want to connect to and replace the psk value with the password for that network.
+
+network={
+        ssid="networkname"
+        psk="networkpassword"
+}
+Once you have entered your network name and network password you can save the file by pressing Ctrl + X then Y and then press Enter.
+
+5. With the packages now installed and our Wi-Fi setup we will now want to setup dhcpcd to try and give our Raspberry Pi a static IP address.
+
+We can achieve this by modifying the dhcpcd.conf file with the following command:
+
+sudo nano /etc/dhcpcd.conf
+6. Within this file we need to add the following lines to the bottom, this will setup the wlan1 connection to how we want it.
+
+ NOTE: If you have upgraded to Raspbian Stretch then wlan0 and wlan1 may need to be changed throughout this tutorial. Use the ifconfig command to see what the new names are, they’re likely quite long and will contain the MAC address.
+
+interface wlan1
+static ip_address=192.168.220.1/24
+static routers=192.168.220.0
+Now we can save and quit out of the file by pressing Ctrl + X then pressing Y and then Enter.
+
+7. Now we need to restart our dhcpd service so it will load in all our configuration changes,:
+
+sudo service dhcpcd restart
+Now we can save and quit out of the file by pressing Ctrl + X then pressing Y and then Enter.
+
+
+ 
+8. Next, we need to adjust our hostapd configuration, to do this we need to begin editing the config file by running the following command on your Raspberry Pi.
+
+sudo nano /etc/hostapd/hostapd.conf
+9. In this file we need to write out the following lines, these basically setup how we want to interact with the wlan device. The only real lines you should worry about in this file is the ssid= line and the wpa_passphrase= line.
+
+ NOTE: You may have to change the driver= line to the best driver for your device, as some Wi-Fi devices have very specific driver requirements. Google will be helpful for looking up what driver you should be using.
+
+interface=wlan1
+driver=nl80211
+
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+ht_capab=[HT40][SHORT-GI-20][DSSS_CCK-40]
+macaddr_acl=0
+ignore_broadcast_ssid=0
+
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+
+ssid=Pi3-Extender
+wpa_passphrase=raspberry
+Remember to change wpa_passphrase to your own password, make sure you set it to something secure so random people can’t just connect into your WiFi extender.
+
+Now we can save and quit out of the file by pressing Ctrl +X then pressing Y and then Enter.
+
+10. With that done we should now modify our hostapd files in /etc/default/ and /etc/init.d/. These files are what hostapd will read to find our new configuration file that we created previously.
+
+To begin editing the first of these two files run the following command:
+
+sudo nano /etc/default/hostapd
+11. In this file, we need to find the following line and replace it:
+Find:
+
+#DAEMON_CONF=""
+Replace with:
+
+DAEMON_CONF="/etc/hostapd/hostapd.conf"
+Now we can save and quit out of the file by pressing Ctrl + X then pressing Y and then Enter.
+
+12. Now we need to edit the second configuration file, this file is located within the init.d folder. We can edit the file with the following command:
+
+sudo nano /etc/init.d/hostapd
+13. In this file, we need to find the following line and replace it:
+Find:
+
+#DAEMON_CONF=
+Replace with:
+
+DAEMON_CONF=/etc/hostapd/hostapd.conf
+Now we can save and quit out of the file by pressing Ctrl +X then pressing Y and then Enter.
+
+14. With hostapd now setup we need to move onto setting up dnsmasq, before we begin editing its configuration we will move the default one to a new location. We can do this with the following command:
+
+sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+15. Now that the original configuration file is moved out of the way we can begin by creating our own new configuration file. We will create and edit the new file with the following command:
+
+sudo nano /etc/dnsmasq.conf
+16. To this file add the following lines, these lines basically tell the dnsmasq service how to handle all the connections coming through.
+
+interface=wlan1       # Use interface wlan1  
+listen-address=192.168.220.1   # Specify the address to listen on  
+bind-interfaces      # Bind to the interface
+server=8.8.8.8       # Use Google DNS  
+domain-needed        # Don't forward short names  
+bogus-priv           # Drop the non-routed address spaces.  
+dhcp-range=192.168.220.50,192.168.220.150,12h # IP range and lease time  
+Now we can save and quit out of the file by pressing Ctrl +X then pressing Y and then Enter.
+
+17. Next, we need to configure our Raspberry Pi so that it will forward all traffic from our wlan1 connection over to our wlan0 connection. First we must enable it through the sysctl.conf configuration file, so let’s begin editing it with the following command:
+
+sudo nano /etc/sysctl.conf
+18. Within this file you need to find the following line, and remove the # from the beginning of it.
+
+Find:
+
+#net.ipv4.ip_forward=1
+Replace with:
+
+net.ipv4.ip_forward=1
+Now we can save and quit out of the file by pressing Ctrl + X then pressing Y and then Enter.
+
+19. Now since we are impatient and don’t want to wait for it to enable on next boot we can run the following command to activate it immediately:
+
+sudo sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"
+20. With IPv4 Forwarding now enabled we can configure a NAT between our wlan0 interface and our wlan1 interface. Basically, this will forward all traffic from our access point over to our ethernet connection.
+
+Run the following commands to add our new rules to the iptable:
+
+sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE  
+sudo iptables -A FORWARD -i wlan0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT  
+sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+ Note: If you get errors when entering the above lines simply reboot the Pi using sudo reboot.
+
+21. Of course iptables are flushed on every boot of the Raspberry Pi so we will need to save our new rules somewhere so they are loaded back in on every boot.
+
+To save our new set of rules run the following command:
+
+sudo sh -c "iptables-save > /etc/iptables.ipv4.nat"
+22. Now with our new rules safely saved somewhere we need to make this file be loaded back in on every reboot. The most simple way to handle this is to modify the rc.local file.
+
+Run the following command to begin editing the file:
+
+sudo nano /etc/rc.local
+23. Now we are in this file, we need to add the line below. Make sure this line appears above exit 0. This line basically reads the settings out of our iptables.ipv4.nat file and loads them into the iptables.
+
+Find:
+
+exit 0
+Add ABOVE:
+
+iptables-restore < /etc/iptables.ipv4.nat
+Now we can save and quit out of the file by pressing Ctrl + X then pressing Y and then Enter.
+
+24. Finally all we need to do is start the two services and enable them in systemctl. Run the following two commands:
+
+sudo service hostapd start
+sudo service dnsmasq start
+25. Now you should finally have a fully operational Raspberry Pi Wireless Access Point, you can ensure this is working by using any of your wireless devices and connecting to your new access point using the SSID and WPA Passphrase that was set earlier on in the tutorial.
+
+To ensure everything will run smoothly it’s best to try rebooting now. This will ensure that everything will successfully re-enable when the Raspberry Pi is started back up. Run the following command to reboot the Raspberry Pi:
+
+sudo reboot
+ Setting up the Raspberry Pi WiFi Extender with a VPN
+This tutorial is fully compatible with our VPN Access Point tutorial. However there is one small change you will have to make in step 13, rather than using the commands showcased there, run the commands below.
+
+Basically the main change you will see here is that instead of redirecting the traffic from wlan0 through the tunnel we will be redirecting the traffic from our wlan1 connection to the tunnel.
+
+sudo iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+sudo iptables -A FORWARD -i tun0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+sudo iptables -A FORWARD -i wlan1 -o tun0 -j ACCEPT
+The rest of the VPN Access Point tutorial can be done without any other changes.
+
+Hopefully by now you should have a fully operational Raspberry Pi WiFi Extender. If you come across any issues or have some feedback related to this tutorial, then please don’t hesitate to leave a comment below.
+
+ Share This!

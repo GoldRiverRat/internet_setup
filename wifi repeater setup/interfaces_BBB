@@ -1,0 +1,25 @@
+auto lo
+iface lo inet loopback
+
+# setup eth0 connection from Land Module to GRR ROVs
+auto eth0
+allow-hotplug eth0
+iface eth0 inet static
+  address 192.168.52.1
+  netmask 255.255.255.0
+
+# setup wlan0 connection from Land Module to Internet
+# auto wlan0
+allow-hotplug wlan0
+iface wlan0 inet manual
+wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+
+# setup wlan1 connection for wifi connected to subnet
+auto wlan1
+allow-hotplug wlan1
+iface wlan1 inet static
+  address 192.168.42.1
+  netmask 255.255.255.0	
+
+
+pre-up iptables-restore < /etc/iptables.ipv4.nat
